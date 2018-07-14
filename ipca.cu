@@ -1,14 +1,14 @@
 #include <stdio.h>
 #include <jpeglib.h>
 
-#define COUNT 1000
+#define COUNT 100
 #define DIMENSION 16
 #define STRIDE 3072
 #define AMNESIC 2.0
 
-double* loadJpeg(char* path, double* o=NULL);
+double* loadJpeg(char* path, double* out=NULL);
 bool saveJpeg(char* path, double* i, int height, int width);
-unsigned char stepInt(double v);
+unsigned char stepInt(double v, double min = -1.0, double max = 1.0);
 
 __global__ void ipca_kernel( int current, int length, double* tableIn, double* tableU, double* tableV ) 
 {
@@ -16,7 +16,7 @@ __global__ void ipca_kernel( int current, int length, double* tableIn, double* t
 	double imgB[STRIDE];
 	double imgC[STRIDE];
 
-	///// スレッドIDを取得->次元番号
+	///// thread id -> dimension id
 	const unsigned int tid = threadIdx.x;
 
 	for(int f = -tid; f < length; f++)
@@ -74,11 +74,11 @@ int main(void)
 	double* images = new double[STRIDE * COUNT];
 	double* U = new double[STRIDE * DIMENSION];
 	double* V = new double[STRIDE * DIMENSION];
-  
+
 	char path[256];
 	for(int c = 0; c < COUNT; c++)
 	{
-		sprintf(path, "icons/%04d.jpg", c);
+		sprintf(path, "data/%04d.jpg", c);
 		loadJpeg(path, images + STRIDE * c);
 	}
 	for(int p = 0; p < STRIDE * DIMENSION; p++)
@@ -105,13 +105,19 @@ int main(void)
 	cudaFree(tableU);
 	cudaFree(tableV);
 
+	for(int d = 0; d < DIMENSION; d++)
+	{
+		sprintf(path, "result/%02d.jpg", d);
+		saveJpeg(path, U + STRIDE * d, 32, 32);
+	}
+
 	delete(images);
 	delete(U);
 	delete(V);
 	printf("end\n");
 }
 
-double* loadJpeg(char* path, double* o=NULL)
+double* loadJpeg(char* path, double* out)
 {
 	struct jpeg_decompress_struct cinfo;
 	struct jpeg_error_mgr jerr;
@@ -123,32 +129,32 @@ double* loadJpeg(char* path, double* o=NULL)
 	int width;
 	int height;
 
-	// JPEGオブジェクトの初期化
+	// initialize JPEG object
 	cinfo.err = jpeg_std_error( &jerr );
 	jpeg_create_decompress( &cinfo );
 
-	// ファイルを開く
+	// open file
 	infile = fopen( path, "rb" );
 	if(infile == NULL) return NULL;
 	jpeg_stdio_src( &cinfo, infile );
 
-	// ヘッダの読み込み
+	// read header
 	jpeg_read_header( &cinfo, TRUE );
 
-	// 展開の開始
+	// start decompress
 	jpeg_start_decompress( &cinfo );
 
-	// 幅と高さの取得
+	// get height, width
 	width = cinfo.output_width;
 	height = cinfo.output_height;
 
-	// イメージを保持するメモリ領域の確保と初期化
+	// prepare memory
 	img = (JSAMPARRAY)malloc( sizeof( JSAMPROW ) * height );
 	for ( i = 0; i < height; i++ ) {
 		img[i] = (JSAMPROW)calloc( sizeof( JSAMPLE ), 3 * width );
 	}
 
-	// 全イメージデータを取得	
+	// retrieve
 	while( cinfo.output_scanline < cinfo.output_height ) {
 		jpeg_read_scanlines( &cinfo,
 			img + cinfo.output_scanline,
@@ -156,85 +162,96 @@ double* loadJpeg(char* path, double* o=NULL)
 		);
 	}
 
-	// 展開の終了
+	// end decompress
 	jpeg_finish_decompress( &cinfo );
 
-	// JPEGオブジェクトの破棄
+	// destroy JPEG object
 	jpeg_destroy_decompress( &cinfo );
 
-	// ファイルを閉じる
+	// close file
 	fclose( infile );
 
-	// HTML化して出力
-	double* out;
-	if(o != NULL) out = o; else out = new double[width*height*3];
+	// to double array
+	if(out == NULL) out = new double[width*height*3];
 	for ( i = 0; i < height; i++ ){
 		for ( j = 0; j < width; j++ ) {
-			int pos = (width*i+j)*3;
-			out[pos+0] = (double)img[i][j*3+0] / 255.0;
-			out[pos+1] = (double)img[i][j*3+1] / 255.0;
-			out[pos+2] = (double)img[i][j*3+2] / 255.0;
+			int loc = (width*i+j)*3;
+			out[loc + 0] = (double)img[i][j*3+0] / 255.0;
+			out[loc + 1] = (double)img[i][j*3+1] / 255.0;
+			out[loc + 2] = (double)img[i][j*3+2] / 255.0;
 		}
 	}
 
-	// イメージデータを保持するメモリ領域を開放
-	for ( i = 0; i < height; i++ )
-		free( img[i] );
+	// free memory
+	for ( i = 0; i < height; i++ ) free( img[i] );
 	free( img );
+
 	printf("jpeg:%s (%d,%d)\n", path, height, width);
 	return out;
 }
 
-unsigned char stepInt(double v, double min = 0, double max = 1)
+unsigned char stepInt(double v, double min, double max)
 {
 	if(v <= min) return 0;
 	if(v >= max) return 255;
 	return (unsigned char)( (v - min) / (max - min) * 255.0 );
 }
 
-bool saveJpeg(char* path, double* img, int height, int width)
+bool saveJpeg(char* path, double* data, int height, int width)
 {
-	FILE* fp = fopen( path, "wb" );
+	/* JPEG Object, Error handling */
+	struct jpeg_compress_struct cinfo;
+	struct jpeg_error_mgr jerr;
 
-	bool result = false;
-	int x, y;
-	struct jpeg_compress_struct jpegc;
-	my_error_mgr myerr;
-	JSAMPROW buffer = NULL;
-	JSAMPROW row;
-	if ((buffer = malloc(sizeof(JSAMPLE) * 3 * width)) == NULL) return false;
+	/* Error handling for default */
+	cinfo.err = jpeg_std_error(&jerr);
 
-	jpegc.err = jpeg_std_error(&myerr.jerr);
-	myerr.jerr.error_exit = error_exit;
-	if (setjmp(myerr.jmpbuf))
-	{
-    	goto error;
+	/* initiazlie JPEG Object */
+	jpeg_create_compress(&cinfo);
+
+	/* open output file */
+	FILE *fp = fopen(path, "wb");
+	if (fp == NULL) {
+		fprintf(stderr, "cannot open %s\n", path);
+		return false;
 	}
- 	jpeg_create_compress(&jpegc);
- 	jpeg_stdio_dest(&jpegc, fp);
-	jpegc.image_width = width;
-	jpegc.image_height = height;
-	jpegc.input_components = 3;
-	jpegc.in_color_space = JCS_RGB;
-	jpeg_set_defaults(&jpegc);
-	jpeg_set_quality(&jpegc, 90, TRUE);
-	jpeg_start_compress(&jpegc, TRUE);
-	for (y = 0; y < height; y++)
-	{
-		row = buffer;
-		
-		for (x = 0; x < width; x++)
-		{
-			*row++ = img->map[y][x].c.r;
-			*row++ = img->map[y][x].c.g;
-			*row++ = img->map[y][x].c.b;
-	    }
-		jpeg_write_scanlines(&jpegc, &buffer, 1);
+	jpeg_stdio_dest(&cinfo, fp);
+
+	/* image settings */
+	cinfo.image_width = width;
+	cinfo.image_height = height;
+	cinfo.input_components = 3;
+	cinfo.in_color_space = JCS_RGB;
+	jpeg_set_defaults(&cinfo);
+	jpeg_set_quality(&cinfo, 75, TRUE);
+
+	/* start compressing */
+	jpeg_start_compress(&cinfo, TRUE);
+
+	/* RGB */
+	JSAMPARRAY img = (JSAMPARRAY) malloc(sizeof(JSAMPROW) * height);
+	for (int i = 0; i < height; i++) {
+		img[i] = (JSAMPROW) malloc(sizeof(JSAMPLE) * 3 * width);
+		for (int j = 0; j < width; j++) {
+			int loc = (i * width + j) * 3;
+			img[i][j*3 + 0] = stepInt( data[loc + 0] );
+			img[i][j*3 + 1] = stepInt( data[loc + 1] );
+			img[i][j*3 + 2] = stepInt( data[loc + 2] );
+		}
 	}
-	jpeg_finish_compress(&jpegc);
-	result = true;
-	error:
-	jpeg_destroy_compress(&jpegc);
-	free(buffer);
-	return result;
+	/* write */
+	jpeg_write_scanlines(&cinfo, img, height);
+
+	/* end compressing */
+	jpeg_finish_compress(&cinfo);
+
+	/* destroy JPEG object */
+	jpeg_destroy_compress(&cinfo);
+
+	for (int i = 0; i < height; i++) {
+		free(img[i]);
+	}
+	free(img);
+	fclose(fp);
+	return true;
 }
