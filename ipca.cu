@@ -13,7 +13,7 @@ unsigned char stepInt(double v, double min = -1.0, double max = 1.0);
 double searchMin(double* img, int height, int width);
 double searchMax(double* img, int height, int width);
 
-__global__ void ipca_kernel( int current, int length, double* tableIn, double* tableU, double* tableV ) 
+__global__ void ipca_kernel( int current, int length, double* tableIn, double* tableU, double* tableV, int* tableFrame ) 
 {
 	double imgA[STRIDE];
 	double imgB[STRIDE];
@@ -21,13 +21,14 @@ __global__ void ipca_kernel( int current, int length, double* tableIn, double* t
 
 	///// thread id -> dimension id
 	const unsigned int tid = threadIdx.x;
+	tableFrame[tid] = -1;
 
-	for(int f = -tid; f < length; f++)
+	for(int f = 0; f < length; f++)
 	{
 		__syncthreads();
 
 		int frame = current + f;
-		if(tid > frame) continue;
+		if(tid > 0 && tableFrame[tid-1] >= f) continue;
 
 		double* strideIn = tableIn + STRIDE * f;
 		double* strideV = tableV + STRIDE * tid;
@@ -41,6 +42,7 @@ __global__ void ipca_kernel( int current, int length, double* tableIn, double* t
 		if(tid == frame)
 		{
 			for(int s=0; s<STRIDE; s++) strideV[s] = strideU[s];
+			tableFrame[tid] = f;
 			continue;
 		}
 
@@ -69,7 +71,10 @@ __global__ void ipca_kernel( int current, int length, double* tableIn, double* t
 
 		for(int s=0; s<STRIDE; s++) imgC[s] = strideV[s] * scalerC;
 		for(int s=0; s<STRIDE; s++) strideU[STRIDE + s] = strideU[s] - imgC[s];
+		
+		tableFrame[tid] = f;
 	}
+	tableFrame[tid] = length;
 }
 
 int main(void)
@@ -77,6 +82,7 @@ int main(void)
 	double* images = new double[STRIDE * COUNT];
 	double* U = new double[STRIDE * DIMENSION];
 	double* V = new double[STRIDE * DIMENSION];
+	int* Frame = new int[DIMENSION];
 
 	printf("start count=%d\n", COUNT);
 	char path[256];
@@ -91,28 +97,32 @@ int main(void)
 		V[p] = 0;
 	}
 	double *tableIn, *tableU, *tableV;
+	int *tableFrame;
  	cudaMalloc(&tableIn, sizeof(images));
  	cudaMalloc(&tableU, sizeof(U));
  	cudaMalloc(&tableV, sizeof(V));
+	cudaMalloc(&tableFrame, sizeof(Frame));
 	cudaMemcpy(images, tableIn, sizeof(images), cudaMemcpyHostToDevice);
 	cudaMemcpy(U, tableU, sizeof(U), cudaMemcpyHostToDevice);
 	cudaMemcpy(V, tableV, sizeof(V), cudaMemcpyHostToDevice);
 
 	dim3 block (DIMENSION, 1, 1);
 	dim3 grid  (1, 1, 1);
-	ipca_kernel<<<grid, block>>>(0, COUNT, tableIn, tableU, tableV);
+	ipca_kernel<<<grid, block>>>(0, COUNT, tableIn, tableU, tableV, tableFrame);
 
 	cudaMemcpy(U, tableU, sizeof(U), cudaMemcpyDeviceToHost);
 	cudaMemcpy(V, tableV, sizeof(V), cudaMemcpyDeviceToHost);
+	cudaMemcpy(Frame, tableFrame, sizeof(Frame), cudaMemcpyDeviceToHost);
 
 	cudaFree(tableIn);
 	cudaFree(tableU);
 	cudaFree(tableV);
+	cudaFree(tableFrame);
 
 	for(int d = 0; d < DIMENSION; d++)
 	{
 		double* img = V + STRIDE * d;
-		printf("%02d: min=%f, max=%f\n", d, searchMin(img, SIZE, SIZE), searchMax(img, SIZE, SIZE));
+		printf("%02d: min=%f, max=%f frame=%d\n", d, searchMin(img, SIZE, SIZE), searchMax(img, SIZE, SIZE), Frame[d]);
 		sprintf(path, "result/%02d.jpg", d);
 		saveJpeg(path, img, SIZE, SIZE);
 	}
@@ -120,6 +130,7 @@ int main(void)
 	delete(images);
 	delete(U);
 	delete(V);
+	delete(Frame);
 	printf("end\n");
 }
 
