@@ -5,10 +5,13 @@
 #define DIMENSION 16
 #define STRIDE 3072
 #define AMNESIC 2.0
+#define SIZE 32
 
 double* loadJpeg(char* path, double* out=NULL);
 bool saveJpeg(char* path, double* i, int height, int width);
 unsigned char stepInt(double v, double min = -1.0, double max = 1.0);
+double searchMin(double* img, int height, int width);
+double searchMax(double* img, int height, int width);
 
 __global__ void ipca_kernel( int current, int length, double* tableIn, double* tableU, double* tableV ) 
 {
@@ -75,6 +78,7 @@ int main(void)
 	double* U = new double[STRIDE * DIMENSION];
 	double* V = new double[STRIDE * DIMENSION];
 
+	printf("start count=%d\n", COUNT);
 	char path[256];
 	for(int c = 0; c < COUNT; c++)
 	{
@@ -88,8 +92,8 @@ int main(void)
 	}
 	double *tableIn, *tableU, *tableV;
  	cudaMalloc(&tableIn, sizeof(images));
- 	cudaMalloc(&tableU, sizeof(tableU));
- 	cudaMalloc(&tableV, sizeof(tableV));
+ 	cudaMalloc(&tableU, sizeof(U));
+ 	cudaMalloc(&tableV, sizeof(V));
 	cudaMemcpy(images, tableIn, sizeof(images), cudaMemcpyHostToDevice);
 	cudaMemcpy(U, tableU, sizeof(U), cudaMemcpyHostToDevice);
 	cudaMemcpy(V, tableV, sizeof(V), cudaMemcpyHostToDevice);
@@ -107,8 +111,10 @@ int main(void)
 
 	for(int d = 0; d < DIMENSION; d++)
 	{
+		double* img = V + STRIDE * d;
+		printf("%02d: min=%f, max=%f\n", d, searchMin(img, SIZE, SIZE), searchMax(img, SIZE, SIZE));
 		sprintf(path, "result/%02d.jpg", d);
-		saveJpeg(path, U + STRIDE * d, 32, 32);
+		saveJpeg(path, img, SIZE, SIZE);
 	}
 
 	delete(images);
@@ -186,7 +192,7 @@ double* loadJpeg(char* path, double* out)
 	for ( i = 0; i < height; i++ ) free( img[i] );
 	free( img );
 
-	printf("jpeg:%s (%d,%d)\n", path, height, width);
+	//printf("jpeg:%s (%d,%d) min=%f max=%f\n", path, height, width, searchMin(out, height, width), searchMax(out, height, width));
 	return out;
 }
 
@@ -254,4 +260,19 @@ bool saveJpeg(char* path, double* data, int height, int width)
 	free(img);
 	fclose(fp);
 	return true;
+}
+
+double searchMin(double* img, int height, int width)
+{
+	double* pEnd = img + height * width * 3;
+	double min = 0;
+	for(double* p = img; p < pEnd; p++) if(min > *p) min = *p;
+	return min;
+}
+double searchMax(double* img, int height, int width)
+{
+	double* pEnd = img + height * width * 3;
+	double max = 0;
+	for(double* p = img; p < pEnd; p++) if(max < *p) max = *p;
+	return max;
 }
