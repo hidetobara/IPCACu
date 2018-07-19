@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <jpeglib.h>
+#include <cuda.h>
 
 #define COUNT 100
 #define DIMENSION 16
@@ -13,14 +14,20 @@ unsigned char stepInt(double v, double min = -1.0, double max = 1.0);
 double searchMin(double* img, int height, int width);
 double searchMax(double* img, int height, int width);
 
+__global__ void kernel(int* tableFrame)
+{
+        int tid = blockIdx.x * blockDim.x + threadIdx.x;
+        tableFrame[tid] = tid;
+}
+
 __global__ void ipca_kernel( int current, int length, double* tableIn, double* tableU, double* tableV, int* tableFrame ) 
 {
-	double imgA[STRIDE];
-	double imgB[STRIDE];
-	double imgC[STRIDE];
+	double* imgA = (double*)malloc(sizeof(double)*STRIDE);
+	double* imgB = (double*)malloc(sizeof(double)*STRIDE);
+	double* imgC = (double*)malloc(sizeof(double)*STRIDE);
 
 	///// thread id -> dimension id
-	const unsigned int tid = threadIdx.x;
+	int tid = blockIdx.x * blockDim.x + threadIdx.x;
 	tableFrame[tid] = -1;
 
 	for(int f = 0; f < length; f++)
@@ -75,6 +82,9 @@ __global__ void ipca_kernel( int current, int length, double* tableIn, double* t
 		tableFrame[tid] = f;
 	}
 	tableFrame[tid] = length;
+	free(imgA);
+	free(imgB);
+	free(imgC);
 }
 
 int main(void)
@@ -98,21 +108,31 @@ int main(void)
 	}
 	double *tableIn, *tableU, *tableV;
 	int *tableFrame;
- 	cudaMalloc(&tableIn, sizeof(images));
- 	cudaMalloc(&tableU, sizeof(U));
- 	cudaMalloc(&tableV, sizeof(V));
-	cudaMalloc(&tableFrame, sizeof(Frame));
-	cudaMemcpy(images, tableIn, sizeof(images), cudaMemcpyHostToDevice);
-	cudaMemcpy(U, tableU, sizeof(U), cudaMemcpyHostToDevice);
-	cudaMemcpy(V, tableV, sizeof(V), cudaMemcpyHostToDevice);
+	size_t sizeIn = sizeof(double)*STRIDE*COUNT;
+	size_t sizeU = sizeof(double)*STRIDE*DIMENSION;
+	size_t sizeV = sizeof(double)*STRIDE*DIMENSION;
+	size_t sizeFrame = sizeof(int)*DIMENSION;
+ 	cudaMalloc(&tableIn, sizeIn);
+ 	cudaMalloc(&tableU, sizeU);
+ 	cudaMalloc(&tableV, sizeV);
+	cudaMalloc(&tableFrame, sizeFrame);
+        printf("0. %s\n", cudaGetErrorString(cudaGetLastError()));
 
-	dim3 block (DIMENSION, 1, 1);
-	dim3 grid  (1, 1, 1);
+	cudaMemcpy(tableIn, images, sizeIn, cudaMemcpyHostToDevice);
+	cudaMemcpy(tableU, U, sizeU, cudaMemcpyHostToDevice);
+	cudaMemcpy(tableV, V, sizeV, cudaMemcpyHostToDevice);
+        printf("1. %s\n", cudaGetErrorString(cudaGetLastError()));
+
+	dim3 grid(1,1,1);
+	dim3 block(16,1,1);
+//	kernel<<<grid, block>>>(tableFrame);
 	ipca_kernel<<<grid, block>>>(0, COUNT, tableIn, tableU, tableV, tableFrame);
+	printf("2. %s\n", cudaGetErrorString(cudaGetLastError()));
 
-	cudaMemcpy(U, tableU, sizeof(U), cudaMemcpyDeviceToHost);
-	cudaMemcpy(V, tableV, sizeof(V), cudaMemcpyDeviceToHost);
-	cudaMemcpy(Frame, tableFrame, sizeof(Frame), cudaMemcpyDeviceToHost);
+	cudaMemcpy(U, tableU, sizeU, cudaMemcpyDeviceToHost);
+	cudaMemcpy(V, tableV, sizeV, cudaMemcpyDeviceToHost);
+	cudaMemcpy(Frame, tableFrame, sizeFrame, cudaMemcpyDeviceToHost);
+        printf("3. %s\n", cudaGetErrorString(cudaGetLastError()));
 
 	cudaFree(tableIn);
 	cudaFree(tableU);
