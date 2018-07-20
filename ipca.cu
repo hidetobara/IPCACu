@@ -2,17 +2,18 @@
 #include <jpeglib.h>
 #include <cuda.h>
 
-#define COUNT 100
+#define COUNT 300
 #define DIMENSION 16
 #define STRIDE 3072
 #define AMNESIC 2.0
 #define SIZE 32
 
 double* loadJpeg(char* path, double* out=NULL);
-bool saveJpeg(char* path, double* i, int height, int width);
+bool saveJpeg(char* path, double* i, int height, int width, double min, double max);
 unsigned char stepInt(double v, double min = -1.0, double max = 1.0);
 double searchMin(double* img, int height, int width);
 double searchMax(double* img, int height, int width);
+double average(double* img, int height, int width);
 
 __global__ void kernel(int* tableFrame)
 {
@@ -30,12 +31,11 @@ __global__ void ipca_kernel( int current, int length, double* tableIn, double* t
 	int tid = blockIdx.x * blockDim.x + threadIdx.x;
 	tableFrame[tid] = -1;
 
-	for(int f = 0; f < length; f++)
+	for(int f = -tid; f < length; f++)
 	{
 		__syncthreads();
 
 		int frame = current + f;
-		if(tid > 0 && tableFrame[tid-1] >= f) continue;
 
 		double* strideIn = tableIn + STRIDE * f;
 		double* strideV = tableV + STRIDE * tid;
@@ -44,6 +44,7 @@ __global__ void ipca_kernel( int current, int length, double* tableIn, double* t
 		if(tid == 0)
 		{
 			for(int s=0; s<STRIDE; s++) strideU[s] = strideIn[s];
+//for(int s=0; s<STRIDE; s++) if(strideIn[s]==0) strideU[0]+=1.0;
 		}
 
 		if(tid == frame)
@@ -52,6 +53,7 @@ __global__ void ipca_kernel( int current, int length, double* tableIn, double* t
 			tableFrame[tid] = f;
 			continue;
 		}
+		if(tid > frame) continue;
 
 		///// Vi(n) = [a= (n-1-l)/n * Vi(n-1)] + [b= (1+l)/n * Ui(n)T Vi(n-1)/|Vi(n-1)| * Ui(n) ]
 		double nrmV = 0;
@@ -134,18 +136,21 @@ int main(void)
 	cudaMemcpy(Frame, tableFrame, sizeFrame, cudaMemcpyDeviceToHost);
         printf("3. %s\n", cudaGetErrorString(cudaGetLastError()));
 
-	cudaFree(tableIn);
-	cudaFree(tableU);
-	cudaFree(tableV);
-	cudaFree(tableFrame);
-
 	for(int d = 0; d < DIMENSION; d++)
 	{
 		double* img = V + STRIDE * d;
-		printf("%02d: min=%f, max=%f frame=%d\n", d, searchMin(img, SIZE, SIZE), searchMax(img, SIZE, SIZE), Frame[d]);
+		double min = searchMin(img, SIZE, SIZE);
+		double max = searchMax(img, SIZE, SIZE);
+		double ave = average(img, SIZE, SIZE);
+		printf("%02d: min=%f, max=%f ave=%f frame=%d\n", d, min, max, ave, Frame[d]);
 		sprintf(path, "result/%02d.jpg", d);
-		saveJpeg(path, img, SIZE, SIZE);
+		saveJpeg(path, img, SIZE, SIZE, min, max);
 	}
+
+        cudaFree(tableIn);
+        cudaFree(tableU);
+        cudaFree(tableV);
+        cudaFree(tableFrame);
 
 	delete(images);
 	delete(U);
@@ -223,7 +228,7 @@ double* loadJpeg(char* path, double* out)
 	for ( i = 0; i < height; i++ ) free( img[i] );
 	free( img );
 
-	//printf("jpeg:%s (%d,%d) min=%f max=%f\n", path, height, width, searchMin(out, height, width), searchMax(out, height, width));
+	//printf("jpeg:%s (%d,%d) min=%f max=%f ave=%f\n", path, height, width, searchMin(out, height, width), searchMax(out, height, width), average(out, height, width));
 	return out;
 }
 
@@ -234,7 +239,7 @@ unsigned char stepInt(double v, double min, double max)
 	return (unsigned char)( (v - min) / (max - min) * 255.0 );
 }
 
-bool saveJpeg(char* path, double* data, int height, int width)
+bool saveJpeg(char* path, double* data, int height, int width, double min, double max)
 {
 	/* JPEG Object, Error handling */
 	struct jpeg_compress_struct cinfo;
@@ -271,9 +276,9 @@ bool saveJpeg(char* path, double* data, int height, int width)
 		img[i] = (JSAMPROW) malloc(sizeof(JSAMPLE) * 3 * width);
 		for (int j = 0; j < width; j++) {
 			int loc = (i * width + j) * 3;
-			img[i][j*3 + 0] = stepInt( data[loc + 0] );
-			img[i][j*3 + 1] = stepInt( data[loc + 1] );
-			img[i][j*3 + 2] = stepInt( data[loc + 2] );
+			img[i][j*3 + 0] = stepInt( data[loc + 0], min, max);
+			img[i][j*3 + 1] = stepInt( data[loc + 1], min, max);
+			img[i][j*3 + 2] = stepInt( data[loc + 2], min, max );
 		}
 	}
 	/* write */
@@ -306,4 +311,11 @@ double searchMax(double* img, int height, int width)
 	double max = 0;
 	for(double* p = img; p < pEnd; p++) if(max < *p) max = *p;
 	return max;
+}
+double average(double* img, int height, int width)
+{
+	double* pEnd = img + height * width * 3;
+	double amount = 0;
+	for(double* p = img; p < pEnd; p++) amount += *p;
+	return amount / (height * width * 3);
 }
