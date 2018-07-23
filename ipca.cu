@@ -5,15 +5,16 @@
 #define COUNT 300
 #define DIMENSION 16
 #define STRIDE 3072
-#define AMNESIC 2.0
+#define AMNESIC 1.0
 #define SIZE 32
 
 double* loadJpeg(char* path, double* out=NULL);
+void loadJpegs(char* path, double* out, int start, int count);
 bool saveJpeg(char* path, double* i, int height, int width, double min, double max);
 unsigned char stepInt(double v, double min = -1.0, double max = 1.0);
 double searchMin(double* img, int height, int width);
 double searchMax(double* img, int height, int width);
-double average(double* img, int height, int width);
+void calcStatistics(double* img, int height, int width, double* average, double* deviation);
 
 __global__ void kernel(int* tableFrame)
 {
@@ -36,7 +37,7 @@ __global__ void ipca_kernel( int current, int length, double* tableIn, double* t
 		__syncthreads();
 
 		int frame = current + f;
-
+		if(tid == 0) tableFrame[0] = frame;
 		double* strideIn = tableIn + STRIDE * f;
 		double* strideV = tableV + STRIDE * tid;
 		double* strideU = tableU + STRIDE * tid;
@@ -44,16 +45,16 @@ __global__ void ipca_kernel( int current, int length, double* tableIn, double* t
 		if(tid == 0)
 		{
 			for(int s=0; s<STRIDE; s++) strideU[s] = strideIn[s];
-//for(int s=0; s<STRIDE; s++) if(strideIn[s]==0) strideU[0]+=1.0;
 		}
-
 		if(tid == frame)
 		{
 			for(int s=0; s<STRIDE; s++) strideV[s] = strideU[s];
-			tableFrame[tid] = f;
+			//tableFrame[tid] = f;
 			continue;
 		}
 		if(tid > frame) continue;
+
+		if(f == length/2) tableFrame[tid] = tableFrame[0];
 
 		///// Vi(n) = [a= (n-1-l)/n * Vi(n-1)] + [b= (1+l)/n * Ui(n)T Vi(n-1)/|Vi(n-1)| * Ui(n) ]
 		double nrmV = 0;
@@ -79,11 +80,9 @@ __global__ void ipca_kernel( int current, int length, double* tableIn, double* t
 		double scalerC = dotUV / (nrmV * nrmV);
 
 		for(int s=0; s<STRIDE; s++) imgC[s] = strideV[s] * scalerC;
-		for(int s=0; s<STRIDE; s++) strideU[STRIDE + s] = strideU[s] - imgC[s];
-		
-		tableFrame[tid] = f;
+		for(int s=0; s<STRIDE; s++) strideU[STRIDE + s] = strideU[s] - imgC[s];	
 	}
-	tableFrame[tid] = length;
+	//tableFrame[tid] = length;
 	free(imgA);
 	free(imgB);
 	free(imgC);
@@ -96,13 +95,6 @@ int main(void)
 	double* V = new double[STRIDE * DIMENSION];
 	int* Frame = new int[DIMENSION];
 
-	printf("start count=%d\n", COUNT);
-	char path[256];
-	for(int c = 0; c < COUNT; c++)
-	{
-		sprintf(path, "data/%04d.jpg", c);
-		loadJpeg(path, images + STRIDE * c);
-	}
 	for(int p = 0; p < STRIDE * DIMENSION; p++)
 	{
 		U[p] = 0;
@@ -120,31 +112,42 @@ int main(void)
 	cudaMalloc(&tableFrame, sizeFrame);
         printf("0. %s\n", cudaGetErrorString(cudaGetLastError()));
 
-	cudaMemcpy(tableIn, images, sizeIn, cudaMemcpyHostToDevice);
 	cudaMemcpy(tableU, U, sizeU, cudaMemcpyHostToDevice);
 	cudaMemcpy(tableV, V, sizeV, cudaMemcpyHostToDevice);
         printf("1. %s\n", cudaGetErrorString(cudaGetLastError()));
 
-	dim3 grid(1,1,1);
-	dim3 block(16,1,1);
-//	kernel<<<grid, block>>>(tableFrame);
-	ipca_kernel<<<grid, block>>>(0, COUNT, tableIn, tableU, tableV, tableFrame);
-	printf("2. %s\n", cudaGetErrorString(cudaGetLastError()));
+	clock_t start, end;
+	start = clock();
+	for(int bb = 0; bb < 12; bb++)
+	{
+		int b = bb % 4;
+		loadJpegs("data/%04d.jpg", images, COUNT * b, COUNT);
+		cudaMemcpy(tableIn, images, sizeIn, cudaMemcpyHostToDevice);
+
+		dim3 grid(1,1,1);
+		dim3 block(16,1,1);
+		ipca_kernel<<<grid, block>>>(COUNT*b, COUNT, tableIn, tableU, tableV, tableFrame);
+		printf("2.%d. %s\n", bb, cudaGetErrorString(cudaGetLastError()));
+	}
+	end = clock();
+	printf("2. %f sec\n", (double)(end - start) / CLOCKS_PER_SEC);
 
 	cudaMemcpy(U, tableU, sizeU, cudaMemcpyDeviceToHost);
 	cudaMemcpy(V, tableV, sizeV, cudaMemcpyDeviceToHost);
 	cudaMemcpy(Frame, tableFrame, sizeFrame, cudaMemcpyDeviceToHost);
         printf("3. %s\n", cudaGetErrorString(cudaGetLastError()));
 
+	char path[256];
+	double ave, dev;
 	for(int d = 0; d < DIMENSION; d++)
 	{
 		double* img = V + STRIDE * d;
 		double min = searchMin(img, SIZE, SIZE);
 		double max = searchMax(img, SIZE, SIZE);
-		double ave = average(img, SIZE, SIZE);
-		printf("%02d: min=%f, max=%f ave=%f frame=%d\n", d, min, max, ave, Frame[d]);
+		calcStatistics(img, SIZE, SIZE, &ave, &dev);
+		printf("%02d: min=%f, max=%f ave=%f dev=%f frame=%d\n", d, min, max, ave, dev, Frame[d]);
 		sprintf(path, "result/%02d.jpg", d);
-		saveJpeg(path, img, SIZE, SIZE, min, max);
+		saveJpeg(path, img, SIZE, SIZE, ave - dev * 2, ave + dev * 2);
 	}
 
         cudaFree(tableIn);
@@ -228,8 +231,18 @@ double* loadJpeg(char* path, double* out)
 	for ( i = 0; i < height; i++ ) free( img[i] );
 	free( img );
 
-	//printf("jpeg:%s (%d,%d) min=%f max=%f ave=%f\n", path, height, width, searchMin(out, height, width), searchMax(out, height, width), average(out, height, width));
+	//printf("jpeg:%s (%d,%d) min=%f max=%f", path, height, width, searchMin(out, height, width), searchMax(out, height, width));
 	return out;
+}
+
+void loadJpegs(char* tpl, double* images, int start, int count)
+{
+        char path[256];
+        for(int c = 0; c < count; c++)
+        {
+                sprintf(path, tpl, start + c);
+                loadJpeg(path, images + STRIDE * c);
+        }
 }
 
 unsigned char stepInt(double v, double min, double max)
@@ -312,10 +325,19 @@ double searchMax(double* img, int height, int width)
 	for(double* p = img; p < pEnd; p++) if(max < *p) max = *p;
 	return max;
 }
-double average(double* img, int height, int width)
+void calcStatistics(double* img, int height, int width, double* average, double* deviation)
 {
 	double* pEnd = img + height * width * 3;
 	double amount = 0;
-	for(double* p = img; p < pEnd; p++) amount += *p;
-	return amount / (height * width * 3);
+	double distribution = 0;
+	for(double* p = img; p < pEnd; p++)
+	{
+		amount += *p;
+		distribution += (*p) * (*p);
+	}
+	
+	amount = amount / (height * width * 3);
+	distribution = distribution / (height * width * 3) - amount * amount;
+	if(average != NULL) *average = amount;
+	if(deviation != NULL) *deviation = sqrt(distribution); 
 }
