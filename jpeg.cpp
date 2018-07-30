@@ -83,7 +83,7 @@ image_t *read_jpeg_stream(FILE *fp) {
     goto error;
   }
   stride = sizeof(JSAMPLE) * jpegd.output_width * jpegd.output_components;
-  if ((buffer = calloc(stride, 1)) == NULL) {
+  if ((buffer = (JSAMPLE*)calloc(stride, 1)) == NULL) {
     goto error;
   }
   if ((img = allocate_image(jpegd.output_width, jpegd.output_height,
@@ -152,7 +152,7 @@ result_t write_jpeg_stream(FILE *fp, image_t *img) {
   if (img == NULL) {
     return FAILURE;
   }
-  if ((buffer = malloc(sizeof(JSAMPLE) * 3 * img->width)) == NULL) {
+  if ((buffer = (JSAMPLE*)malloc(sizeof(JSAMPLE) * 3 * img->width)) == NULL) {
     return FAILURE;
   }
   if (img->color_type != COLOR_TYPE_RGB) {

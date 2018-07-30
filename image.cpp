@@ -50,25 +50,25 @@ void dump_image_info(image_t *img) {
 image_t *allocate_image(uint32_t width, uint32_t height, uint8_t type) {
   uint32_t i;
   image_t *img;
-  if ((img = calloc(1, sizeof(image_t))) == NULL) {
+  if ((img = (image_t*)calloc(1, sizeof(image_t))) == NULL) {
     return NULL;
   }
   img->width = width;
   img->height = height;
   img->color_type = type;
   if (type == COLOR_TYPE_INDEX) {
-    if ((img->palette = calloc(256, sizeof(color_t))) == NULL) {
+    if ((img->palette = (color_t*)calloc(256, sizeof(color_t))) == NULL) {
       goto error;
     }
   } else {
     img->palette = NULL;
   }
   img->palette_num = 0;
-  if ((img->map = calloc(height, sizeof(pixcel_t*))) == NULL) {
+  if ((img->map = (pixcel_t**)calloc(height, sizeof(pixcel_t*))) == NULL) {
     goto error;
   }
   for (i = 0; i < height; i++) {
-    if ((img->map[i] = calloc(width, sizeof(pixcel_t))) == NULL) {
+    if ((img->map[i] = (pixcel_t*)calloc(width, sizeof(pixcel_t))) == NULL) {
       goto error;
     }
   }
@@ -357,7 +357,7 @@ image_t *image_rgb_to_index(image_t *img) {
     return NULL;
   }
   // 色数をカウントするとともにカラーパレットを作成
-  palette = calloc(256, sizeof(color_t));
+  palette = (color_t*)calloc(256, sizeof(color_t));
   for (y = 0; y < img->height; y++) {
     for (x = 0; x < img->width; x++) {
       color_t *c = &img->map[y][x].c;
@@ -421,7 +421,7 @@ image_t *image_gray_to_index(image_t *img) {
     return NULL;
   }
   // グレイスケールの値がそのままインデックス値になるようにカラーパレットを作成
-  palette = calloc(256, sizeof(color_t));
+  palette = (color_t*)calloc(256, sizeof(color_t));
   for (i = 0; i < 256; i++) {
     palette[i].r = i;
     palette[i].g = i;
@@ -604,7 +604,7 @@ image_t *image_gray_to_binary(image_t *img) {
     return NULL;
   }
   img->palette_num = 2;
-  img->palette = calloc(256, sizeof(color_t));
+  img->palette = (color_t*)calloc(256, sizeof(color_t));
   img->palette[0] = color_from_rgb(255, 255, 255);
   img->palette[1] = color_from_rgb(0, 0, 0);
   for (y = 0; y < img->height; y++) {

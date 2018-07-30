@@ -84,12 +84,12 @@ __global__ void ipca_kernel( int current, int length, double* tableIn, double* t
 	free(imgC);
 }
 
-ipca_t* ipca_initialize()
+__host__ ipca_t* ipca_initialize()
 {
-	ipca_t* t = malloc(sizeof(ipca_t));
-	t->COUNT = COUNT;
-	t->STRIDE = STRIDE;
-	t->DIMENSION = DIMENSION;
+	ipca_t* t = (ipca_t*)malloc(sizeof(ipca_t));
+	t->Count = COUNT;
+	t->Stride = STRIDE;
+	t->Dimension = DIMENSION;
 	t->frame = 0;
 
 	t->hostImages = new double[STRIDE * COUNT];
@@ -120,14 +120,14 @@ ipca_t* ipca_initialize()
 	return t;
 }
 
-void ipca_run(ipca_t* t, double* images)
+__host__ void ipca_run(ipca_t* t, double* images)
 {
 	clock_t start, end;
 	start = clock();
 
 	cudaMemcpy(t->deviceImages, images, t->sizeImages, cudaMemcpyHostToDevice);
 	dim3 grid(1,1,1);
-	dim3 block(16,1,1);
+	dim3 block(DIMENSION,1,1);
 	ipca_kernel<<<grid, block>>>(t->frame, COUNT, t->deviceImages, t->deviceU, t->deviceV, t->deviceFrames);
 	t->frame += COUNT;
 
@@ -135,7 +135,7 @@ void ipca_run(ipca_t* t, double* images)
 	printf("2. %fsec %s\n", (double)(end - start) /CLOCKS_PER_SEC, cudaGetErrorString(cudaGetLastError()));
 }
 
-void ipca_sync(ipca_t* t)
+__host__ void ipca_sync(ipca_t* t)
 {
 	cudaMemcpy(t->hostU, t->deviceU, t->sizeU, cudaMemcpyDeviceToHost);
 	cudaMemcpy(t->hostV, t->deviceV, t->sizeV, cudaMemcpyDeviceToHost);
@@ -143,7 +143,7 @@ void ipca_sync(ipca_t* t)
         printf("3. %s\n", cudaGetErrorString(cudaGetLastError()));
 }
 
-void ipca_finalize(ipca_t* t)
+__host__ void ipca_finalize(ipca_t* t)
 {
         cudaFree(t->deviceImages);
         cudaFree(t->deviceU);
@@ -158,3 +158,20 @@ void ipca_finalize(ipca_t* t)
 	free(t);
 }
 
+__host__ void ipca_check(ipca_t* t)
+{
+	for(int m = 0; m < DIMENSION; m++)
+	{
+		printf("DIM=%d", m);
+		for(int n = 0; n < DIMENSION; n++)
+		{
+			printf("\t");
+			double* pM = t->hostV + STRIDE * m;
+			double* pN = t->hostV + STRIDE * n;
+			double amount = 0;
+			for(int s = 0; s < STRIDE; s++, pM++, pN++) amount += (*pM) * (*pN);
+			printf("%5.2f", amount);
+		}
+		printf("\n");
+	}	
+}

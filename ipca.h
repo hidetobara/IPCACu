@@ -30,6 +30,7 @@ ipca_t* ipca_initialize();
 void ipca_run(ipca_t* t, double* images);
 void ipca_sync(ipca_t* t);
 void ipca_finalize(ipca_t* t);
+void ipca_check(ipca_t* t);
 
 #endif
 

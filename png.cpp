@@ -243,20 +243,20 @@ result_t write_png_stream(FILE *fp, image_t *img) {
   png_set_IHDR(png, info, img->width, img->height, 8,
       color_type, PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT,
       PNG_FILTER_TYPE_DEFAULT);
-  rows = png_malloc(png, sizeof(png_bytep) * img->height);
+  rows = (png_bytepp)png_malloc(png, sizeof(png_bytep) * img->height);
   if (rows == NULL) {
     goto error;
   }
   png_set_rows(png, info, rows);
   memset(rows, 0, sizeof(png_bytep) * img->height);
   for (y = 0; y < img->height; y++) {
-    if ((rows[y] = png_malloc(png, row_size)) == NULL) {
+    if ((rows[y] = (png_byte*)png_malloc(png, row_size)) == NULL) {
       goto error;
     }
   }
   switch (img->color_type) {
     case COLOR_TYPE_INDEX:  // インデックスカラー
-      palette = png_malloc(png, sizeof(png_color) * img->palette_num);
+      palette = (png_colorp)png_malloc(png, sizeof(png_color) * img->palette_num);
       for (i = 0; i < img->palette_num; i++) {
         palette[i].red = img->palette[i].r;
         palette[i].green = img->palette[i].g;
