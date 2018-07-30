@@ -160,6 +160,9 @@ __host__ void ipca_finalize(ipca_t* t)
 
 __host__ void ipca_check(ipca_t* t)
 {
+	// FRAME
+	printf("FRM=%d\n", t->frame);
+	// DIMENSION
 	for(int m = 0; m < DIMENSION; m++)
 	{
 		printf("DIM=%d", m);
