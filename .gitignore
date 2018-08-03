@@ -1,4 +1,5 @@
 data/*
 result/*
+correct/*
 a.out
 *.o
