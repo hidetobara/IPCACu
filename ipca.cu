@@ -9,6 +9,7 @@
 #define AMNESIC 1.0
 #define SIZE 32
 
+#define DEBUG 1
 
 /*
 __global__ void kernel(int* tableFrame)
@@ -30,7 +31,7 @@ __global__ void ipca_kernel( int current, int length, double* tableIn, double* t
 
 	for(int f = -tid; f < length; f++)
 	{
-		__syncthreads();
+		//__syncthreads();
 
 		int frame = current + f;
 		if(tid == 0) tableFrame[0] = frame;
@@ -122,24 +123,35 @@ __host__ ipca_t* ipca_initialize()
 
 __host__ void ipca_run(ipca_t* t, double* images)
 {
-	clock_t start, end;
+	clock_t start, toDevice, end, toHost;
 	start = clock();
 
 	cudaMemcpy(t->deviceImages, images, t->sizeImages, cudaMemcpyHostToDevice);
+	toDevice = clock();
 	dim3 grid(1,1,1);
 	dim3 block(DIMENSION,1,1);
 	ipca_kernel<<<grid, block>>>(t->frame, COUNT, t->deviceImages, t->deviceU, t->deviceV, t->deviceFrames);
 	t->frame += COUNT;
+	toHost = end = clock();
 
-	end = clock();
-	printf("2. %fsec %s\n", (double)(end - start) /CLOCKS_PER_SEC, cudaGetErrorString(cudaGetLastError()));
+#ifdef DEBUG
+	cudaMemcpy(t->hostFrames, t->deviceFrames, t->sizeFrames, cudaMemcpyDeviceToHost);
+	toHost = clock();
+
+	for(int d = 0; d < DIMENSION; d++)
+	{
+		printf("\t%d=%d", d, t->hostFrames[d]);
+	}
+	printf("\n");
+#endif
+	printf("2. %fsec %s\n", (double)(end - toDevice)/CLOCKS_PER_SEC, cudaGetErrorString(cudaGetLastError()));
+	printf("\tdevice=%f host=%f\n", (double)(toDevice - start)/CLOCKS_PER_SEC, (double)(toHost - end)/CLOCKS_PER_SEC);
 }
 
 __host__ void ipca_sync(ipca_t* t)
 {
 	cudaMemcpy(t->hostU, t->deviceU, t->sizeU, cudaMemcpyDeviceToHost);
 	cudaMemcpy(t->hostV, t->deviceV, t->sizeV, cudaMemcpyDeviceToHost);
-	cudaMemcpy(t->hostFrames, t->deviceFrames, t->sizeFrames, cudaMemcpyDeviceToHost);
         printf("3. %s\n", cudaGetErrorString(cudaGetLastError()));
 }
 
